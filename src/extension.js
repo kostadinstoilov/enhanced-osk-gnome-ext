@@ -334,10 +334,20 @@ export default class enhancedosk extends Extension {
 
     this._injectionManager.overrideMethod(
       Keyboard.Keyboard.prototype, '_setActiveLevel',
-      _ => {
+      originalMethod => {
         return function (activeLevel) {
+          // Safety check: if layers are not initialized yet, fall back to original method
+          if (!this._layers) {
+            return originalMethod.call(this, activeLevel);
+          }
+
           const layers = this._layers;
           let currentPage = layers[activeLevel];
+
+          // Safety check: if the requested level doesn't exist, fall back to original method
+          if (!currentPage) {
+            return originalMethod.call(this, activeLevel);
+          }
 
           if (this._currentPage === currentPage) {
             this._updateCurrentPageVisible();
