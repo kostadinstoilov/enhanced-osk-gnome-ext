@@ -10,12 +10,48 @@ import * as Keyboard from 'resource:///org/gnome/shell/ui/keyboard.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 
 const A11Y_APPLICATIONS_SCHEMA = "org.gnome.desktop.a11y.applications";
+const KEY_RELEASE_TIMEOUT = 100;
 
 
 //check how to get metadata
 
 let settings;
 let keyReleaseTimeoutId;
+
+//Model class for _addrowKeys emulation
+class KeyboardModel {
+  constructor(groupName) {
+    let names = [groupName];
+    if (groupName.includes('+'))
+      names.push(groupName.replace(/\+.*/, ''));
+    names.push('us');
+
+    for (let i = 0; i < names.length; i++) {
+      try {
+        this._model = this._loadModel(names[i]);
+        break;
+      } catch (e) {
+      }
+    }
+  }
+
+  _loadModel(groupName) {
+    const file = Gio.File.new_for_uri(
+      `resource:///org/gnome/shell/osk-layouts/${groupName}.json`);
+    let [success_, contents] = file.load_contents(null);
+
+    const decoder = new TextDecoder();
+    return JSON.parse(decoder.decode(contents));
+  }
+
+  getLevels() {
+    return this._model.levels;
+  }
+
+  getKeysForLevel(levelName) {
+    return this._model.levels.find(level => level === levelName);
+  }
+}
 
 // Indicator
 let OSKIndicator = GObject.registerClass(
@@ -71,6 +107,70 @@ function override_getCurrentGroup() {
     }
   }
   return this._currentSource.xkbId;
+}
+
+function addition_createLayersforGroup(ref_this,groupName) {
+  //console.log("osk: JS ERROR Running addition_create");
+  //Idea: emulate _createLayersForGroup
+  //copy over KeyboardModel class to here as extra class (not complex)
+  //shiftKeys needs to be repopulated
+  //loadRows directly in
+  //check appendRow
+  //then comes _addRowKeys
+  //there instead of creating new button we load button from layout
+  // then we disconnect button
+  // then run all the rest of  wthe overwrite function
+  // without appendKey function
+
+  //Note: This is all necessary because Key class in keyboard.js is not exported
+  //if exported then the original override_addRowKeys can be used
+
+  //a is layers array that contains all layouts
+  //let a =  ref_this._groups[ref_this._keyboardController.getCurrentGroup()];
+  //a[n] is nth layout; then _rows[n] nth row;
+  //keys[n] nth keyInfo (check appendKey function;
+  //.key gives you then the key class
+  //let b = a[0]._rows[0].keys[0].key
+  //b.disconnect()
+  //b.connect('released', () => {ref_this.close();});
+  let keyboardModel = new KeyboardModel(groupName);
+  let layers = ref_this._layers;
+  let levels = keyboardModel.getLevels();
+  for (let i = 0; i < levels.length; i++) {
+  //for (let i = 0; i < 0; i++) {
+    let currentLevel = levels[i];
+    let levelName = currentLevel.level;
+    let layout = layers[levelName]
+    if (layout) {
+      layout.shiftKeys = [];
+      layout.mode = currentLevel.mode;
+      //this._loadRows(currentLevel, level, levels.length, layout);
+      //_loadRows(model, level, numLevels, layout) {
+      let rows = currentLevel.rows;
+      for (let j = 0; j < rows.length; ++j) {
+        override_addRowKeys(ref_this,rows[j], layout,j);
+      }
+      layout.hide();
+    }
+  }
+}
+
+function override_addRowKeys(ref_this, keys, layout,index_row) {
+  for (let i = 0; i < keys.length; ++i) {
+    const key = keys[i];
+    if (layout._rows[index_row] && layout._rows[index_row].keys[i]) {
+      let button = layout._rows[index_row].keys[i].key
+
+      if (key.iconName === 'keyboard-shift-symbolic'){
+        layout.shiftKeys.push(button);
+        button.connect('long-press', () => {
+          ref_this._setActiveLevel('shift');
+          ref_this._setLatched(true);
+          ref_this._iscapslock = true;
+        });
+      }
+    }
+  }
 }
 
 // Extension
@@ -227,6 +327,8 @@ export default class enhancedosk extends Extension {
           originalMethod.call(this);
           //track active level
           this._activeLevel = 'default';
+          //track capslock
+          this._iscapslock = false;
         }
       });
 
@@ -249,7 +351,6 @@ export default class enhancedosk extends Extension {
             delete this._currentPage._destroyID;
           }
 
-          this._disableAllModifiers();
           this._currentPage = currentPage;
           this._currentPage._destroyID = this._currentPage.connect('destroy', () => {
             this._currentPage = null;
@@ -259,6 +360,17 @@ export default class enhancedosk extends Extension {
           this._emojiSelection.setRatio(...this._currentPage.getRatio());
           //track the active level
           this._activeLevel = activeLevel;
+        }
+      });
+
+    this._injectionManager.overrideMethod(
+      Keyboard.Keyboard.prototype, '_ensureKeysForGroup',
+      originalMethod => {
+        return function (group) {
+          originalMethod.call(this, group);
+          if (this._layers){
+            addition_createLayersforGroup(this,group);
+          }
         }
       });
 
@@ -273,10 +385,10 @@ export default class enhancedosk extends Extension {
           if (keyval === SHIFT_KEYVAL) {
             //if capslock on just go back to layer 0
             //and do not activate modifier
-            if (this._longPressed) {
+            if (this._iscapslock) {
               this._setLatched(false);
               this._setActiveLevel('default');
-              this._longPressed = false;
+              this._iscapslock = false;
               this._disableAllModifiers();
             }
             //otherwise switch between layers
@@ -293,6 +405,53 @@ export default class enhancedosk extends Extension {
           else {
             this._setModifierEnabled(keyval, !isActive);
           };
+        }
+      });
+
+    this._injectionManager.overrideMethod(
+      Keyboard.Keyboard.prototype, '_commitAction',
+      originalMethod => {
+        return async function (keyval,str) {
+          if (this._modifiers.size === 0 && str !== '' &&
+              keyval && this._oskCompletionEnabled) {
+            if (await Main.inputMethod.handleVirtualKey(keyval))
+              return;
+          }
+
+          if (str === '' || !Main.inputMethod.currentFocus ||
+              (keyval && this._oskCompletionEnabled) ||
+              this._modifiers.size > 0 ||
+              !this._keyboardController.commitString(str, true)) {
+            if (keyval !== 0) {
+              this._forwardModifiers(this._modifiers, Clutter.EventType.KEY_PRESS);
+              this._keyboardController.keyvalPress(keyval);
+              keyReleaseTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, KEY_RELEASE_TIMEOUT, () => {
+                this._keyboardController.keyvalRelease(keyval);
+                this._forwardModifiers(this._modifiers, Clutter.EventType.KEY_RELEASE);
+                //override start
+                if (!this._iscapslock)
+                  this._disableAllModifiers();
+                //override end
+                return GLib.SOURCE_REMOVE;
+              });
+            }
+          }
+        }
+      })
+
+    this._injectionManager.overrideMethod(
+      Keyboard.Keyboard.prototype, '_toggleDelete',
+      originalMethod => {
+        return function (enabled) {
+          if (this._deleteEnabled === enabled) return;
+
+          this._deleteEnabled = enabled;
+
+          if (enabled) {
+            this._keyboardController.keyvalPress(Clutter.KEY_BackSpace);
+          } else {
+            this._keyboardController.keyvalRelease(Clutter.KEY_BackSpace);
+          }
         }
       });
 
