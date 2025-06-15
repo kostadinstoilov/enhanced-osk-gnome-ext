@@ -249,7 +249,6 @@ export default class enhancedosk extends Extension {
             delete this._currentPage._destroyID;
           }
 
-          this._disableAllModifiers();
           this._currentPage = currentPage;
           this._currentPage._destroyID = this._currentPage.connect('destroy', () => {
             this._currentPage = null;
