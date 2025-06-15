@@ -305,60 +305,9 @@ export default class enhancedosk extends Extension {
           this._deleteEnabled = enabled;
 
           if (enabled) {
-            // Initialize surrounding update ID if not set
-            if (!this._surroundingUpdateId) {
-              this._surroundingUpdateId = 0;
-            }
-            
-            // Handle text selection properly for backspace
-            let func = (text, cursor, anchor) => {
-              if (!text || (cursor === 0 && anchor === 0))
-                return;
-
-              let offset, len;
-              if (cursor > anchor) {
-                // Selection from anchor to cursor (forward selection)
-                offset = anchor - cursor;
-                len = cursor - anchor;
-              } else if (cursor < anchor) {
-                // Selection from cursor to anchor (backward selection)
-                offset = 0;
-                len = anchor - cursor;
-              } else {
-                // No selection, delete single character before cursor
-                if (cursor === 0) return; // Can't delete before start
-                offset = -1;
-                len = 1;
-              }
-
-              if (len > 0) {
-                Main.inputMethod.delete_surrounding(offset, len);
-              }
-            };
-
-            this._surroundingUpdateId = Main.inputMethod.connect(
-              'surrounding-text-set', () => {
-                let surroundingText = Main.inputMethod.getSurroundingText();
-                let text = surroundingText[0];
-                let cursor = surroundingText[1];
-                let anchor = surroundingText[2] !== undefined ? surroundingText[2] : cursor;
-                func(text, cursor, anchor);
-              });
-
-            let surroundingText = Main.inputMethod.getSurroundingText();
-            if (surroundingText && surroundingText[0]) {
-              let text = surroundingText[0];
-              let cursor = surroundingText[1];
-              let anchor = surroundingText[2] !== undefined ? surroundingText[2] : cursor;
-              func(text, cursor, anchor);
-            } else {
-              Main.inputMethod.request_surrounding();
-            }
+            this._keyboardController.keyvalPress(Clutter.KEY_BackSpace);
           } else {
-            if (this._surroundingUpdateId) {
-              Main.inputMethod.disconnect(this._surroundingUpdateId);
-              this._surroundingUpdateId = 0;
-            }
+            this._keyboardController.keyvalRelease(Clutter.KEY_BackSpace);
           }
         }
       });
