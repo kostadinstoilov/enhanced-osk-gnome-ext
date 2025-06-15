@@ -296,6 +296,22 @@ export default class enhancedosk extends Extension {
         }
       });
 
+    this._injectionManager.overrideMethod(
+      Keyboard.Keyboard.prototype, '_toggleDelete',
+      originalMethod => {
+        return function (enabled) {
+          if (this._deleteEnabled === enabled) return;
+
+          this._deleteEnabled = enabled;
+
+          if (enabled) {
+            this._keyboardController.keyvalPress(Clutter.KEY_BackSpace);
+          } else {
+            this._keyboardController.keyvalRelease(Clutter.KEY_BackSpace);
+          }
+        }
+      });
+
     // Unregister original osk layouts resource file
     this.getDefaultLayouts()._unregister();
 
