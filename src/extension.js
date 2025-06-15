@@ -10,6 +10,7 @@ import * as Keyboard from 'resource:///org/gnome/shell/ui/keyboard.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 
 const A11Y_APPLICATIONS_SCHEMA = "org.gnome.desktop.a11y.applications";
+const KEY_RELEASE_TIMEOUT = 100;
 
 
 //check how to get metadata
@@ -357,6 +358,40 @@ export default class enhancedosk extends Extension {
             if (this._surroundingUpdateId) {
               Main.inputMethod.disconnect(this._surroundingUpdateId);
               this._surroundingUpdateId = 0;
+            }
+          }
+        }
+      });
+
+    this._injectionManager.overrideMethod(
+      Keyboard.Keyboard.prototype, '_commitAction',
+      originalMethod => {
+        return async function (keyval, str) {
+          // Handle virtual key completion if available
+          if (this._modifiers.size === 0 && str !== '' && keyval) {
+            // Try to use virtual key handling if available
+            try {
+              if (Main.inputMethod.handleVirtualKey && await Main.inputMethod.handleVirtualKey(keyval))
+                return;
+            } catch (e) {
+              // handleVirtualKey might not be available, continue with normal processing
+            }
+          }
+
+          if (str === '' || !Main.inputMethod.currentFocus ||
+              this._modifiers.size > 0 ||
+              !this._keyboardController.commitString(str, true)) {
+            if (keyval !== 0) {
+              this._forwardModifiers(this._modifiers, Clutter.EventType.KEY_PRESS);
+              this._keyboardController.keyvalPress(keyval);
+              keyReleaseTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, KEY_RELEASE_TIMEOUT, () => {
+                this._keyboardController.keyvalRelease(keyval);
+                this._forwardModifiers(this._modifiers, Clutter.EventType.KEY_RELEASE);
+                // Don't disable modifiers if caps lock is active (long press)
+                if (!this._longPressed)
+                  this._disableAllModifiers();
+                return GLib.SOURCE_REMOVE;
+              });
             }
           }
         }
